@@ -34,6 +34,7 @@ class Node:
         return best_child
 
     def get_ucb(self, child):
+        # pick the child for which the opponent is least likely to win - value scaled from [-1, 1] to [0, 1]
         q_value = 1 - ((child.value_sum / child.visit_count) + 1) / 2
         return q_value + self.args['C'] * math.sqrt(math.log(self.visit_count) / child.visit_count)
 
@@ -41,7 +42,9 @@ class Node:
         action = choice(self.expandable_moves)
         self.expandable_moves.remove(action)
         child_game = deepcopy(self.game)
+        # all nodes play as if they were player 1 - therefore:
         child_game.recode_black_as_white()
+        # moove has to be after recoding as it has the evaluation function in it
         child_game.moove(action)
         child = Node(child_game, self.args, self, action)
         self.children.append(child)
@@ -81,7 +84,7 @@ class MCTS:
                 node = node.expand()
                 value = node.simulate()
 
-            node.backpropagate(-value)
+            node.backpropagate(value)
 
         action_probs = np.zeros(len(self.game.get_action_space()))
         for child in root.children:
