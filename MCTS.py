@@ -65,7 +65,6 @@ class MCTS:
     def __init__(self, game, args):
         self.game = game
         self.args = args
-        self.player = self.game.player
 
     def search(self):
         root = Node(self.game, self.args)
