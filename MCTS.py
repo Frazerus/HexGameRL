@@ -43,10 +43,11 @@ class Node:
         self.expandable_moves.remove(action)
         child_game = deepcopy(self.game)
         # all nodes play as if they were player 1 - therefore:
-        child_game.recode_black_as_white()
+        child_game.board = child_game.recode_black_as_white()
+        child_game.player = -1
         # moove has to be after recoding as it has the evaluation function in it
-        child_game.moove(action)
-        child = Node(child_game, self.args, self, action)
+        child_game.moove(self.game.recode_coordinates(action))
+        child = Node(child_game, self.args, self, self.game.recode_coordinates(action))
         self.children.append(child)
         return child
 
@@ -88,7 +89,7 @@ class MCTS:
 
         action_probs = np.zeros(len(self.game.get_action_space()))
         for child in root.children:
-            action_probs[self.game.get_action_space().index(child.action_taken)] = child.visit_count
+            action_probs[self.game.get_action_space().index(self.game.recode_coordinates(child.action_taken))] = child.visit_count
         action_probs /= np.sum(action_probs)
         return action_probs
 
@@ -113,10 +114,12 @@ while True:
             continue
 
     else:
-        game.recode_black_as_white()
+        game.board = game.recode_black_as_white()
+        game.player = 1
         mcts_probs = mcts.search()
-        action = game.get_action_space()[np.argmax(mcts_probs)]
-        game.recode_black_as_white()
+        action = game.recode_coordinates(game.get_action_space()[np.argmax(mcts_probs)])
+        game.board = game.recode_black_as_white()
+        game.player = -1
 
     game.moove(action)
     if game.winner != 0:
