@@ -77,7 +77,7 @@ encoded_state = np.stack(
     (board == 1, board == 0, board == -1)
 ).astype(np.float32)
 
-print(encoded_state)
+print(encoded_state[1].flatten())
 
 tensor_state = torch.tensor(encoded_state).unsqueeze(0)
 

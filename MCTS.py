@@ -1,25 +1,29 @@
 import numpy as np
 import math
 from random import choice
+
+import torch
+
+from REIL.HexGameRL.Model import ResNet
 from engine import hex_engine
 from copy import deepcopy
 
 
 class Node:
-    def __init__(self, game, args, parent=None, action_taken=None):
+    def __init__(self, game, args, parent=None, action_taken=None, prior=0):
         self.game = game
         self.args = args
         self.parent = parent
         self.action_taken = action_taken
+        self.prior = prior
 
         self.children = []
-        self.expandable_moves = self.game.get_action_space()
 
         self.visit_count = 0
         self.value_sum = 0
 
     def is_fully_expanded(self):
-        return len(self.expandable_moves) == 0 and len(self.children) > 0
+        return len(self.children) > 0
 
     def select(self):
         best_child = None
@@ -34,28 +38,24 @@ class Node:
         return best_child
 
     def get_ucb(self, child):
-        # pick the child for which the opponent is least likely to win - value scaled from [-1, 1] to [0, 1]
-        q_value = 1 - ((child.value_sum / child.visit_count) + 1) / 2
-        return q_value + self.args['C'] * math.sqrt(math.log(self.visit_count) / child.visit_count)
+        if child.visit_count == 0:
+            q_value = 0
+        else:
+            # pick the child for which the opponent is least likely to win - value scaled from [-1, 1] to [0, 1]
+            q_value = 1 - ((child.value_sum / child.visit_count) + 1) / 2
+        return q_value + self.args['C'] * child.prior * math.sqrt(self.visit_count / (child.visit_count + 1))
 
-    def expand(self):
-        action = choice(self.expandable_moves)
-        self.expandable_moves.remove(action)
-        child_game = deepcopy(self.game)
-        # all nodes play as if they were player 1 - therefore:
-        child_game.board = child_game.recode_black_as_white()
-        child_game.player = -1
-        # moove has to be after recoding as it has the evaluation function in it
-        child_game.moove(self.game.recode_coordinates(action))
-        child = Node(child_game, self.args, self, self.game.recode_coordinates(action))
-        self.children.append(child)
-        return child
-
-    def simulate(self):
-        simulation = deepcopy(self.game)
-        while simulation.winner == 0 and len(simulation.get_action_space()) != 0:
-            simulation.moove(choice(simulation.get_action_space()))
-        return simulation.winner
+    def expand(self, policy):
+        for action_idx, prob in enumerate(policy):
+            if prob > 0:
+                child_game = deepcopy(self.game)
+                # all nodes play as if they were player 1 - therefore:
+                child_game.board = child_game.recode_black_as_white()
+                child_game.player = -1
+                # moove has to be after recoding as it has the evaluation function in it
+                child_game.moove(self.game.recode_coordinates(self.game.scalar_to_coordinates(action_idx)))
+                child = Node(child_game, self.args, self, self.game.recode_coordinates(self.game.scalar_to_coordinates(action_idx)), prob)
+                self.children.append(child)
 
     def backpropagate(self, value):
         self.value_sum += value
@@ -66,10 +66,12 @@ class Node:
 
 
 class MCTS:
-    def __init__(self, game, args):
+    def __init__(self, game, args, model):
         self.game = game
         self.args = args
+        self.model = model
 
+    @torch.no_grad()
     def search(self):
         root = Node(self.game, self.args)
 
@@ -82,8 +84,15 @@ class MCTS:
             value, is_terminal = node.game.winner, node.game.winner != 0 or len(node.game.get_action_space()) == 0
 
             if not is_terminal:
-                node = node.expand()
-                value = node.simulate()
+                state = np.array(node.game.board)
+                encoded_state = np.stack((state == 1, state == 0, state == -1)).astype(np.float32)
+                policy, value = self.model(torch.tensor(encoded_state).unsqueeze(0))
+                policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
+                valid_move_fields = encoded_state[1].reshape(-1)
+                policy *= valid_move_fields
+                policy /= np.sum(policy)
+                value = value.item()
+                node.expand(policy)
 
             node.backpropagate(value)
 
@@ -95,11 +104,14 @@ class MCTS:
 
 
 args = {
-    'C': 1.41,
+    'C': 2,
     'num_searches': 1000
 }
-game = hex_engine.hexPosition()
-mcts = MCTS(game, args)
+
+game = hex_engine.hexPosition(size=3)
+model = ResNet(game, 4, 64)
+model.eval()
+mcts = MCTS(game, args, model)
 
 while True:
     game.print()
