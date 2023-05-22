@@ -32,7 +32,8 @@ class AlphaZero:
             memory.append((np.stack((self.game.board == 1, self.game.board == 0, self.game.board == -1)).astype(np.float32), action_probs, actual_player))
 
             temperature_action_probs = action_probs ** (1 / self.args['temperature'])
-            action = choices(self.game.get_action_space(), weights=temperature_action_probs)[0]
+            temperature_action_probs /= sum(temperature_action_probs)
+            action = self.game.scalar_to_coordinates(np.random.choice(self.game.size ** 2, p=temperature_action_probs))
 
             self.game.moove(action)
 

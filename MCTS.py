@@ -99,7 +99,7 @@ class MCTS:
                 state = np.array(node.game.board)
                 encoded_state = np.stack((state == 1, state == 0, state == -1)).astype(np.float32)
                 policy, value = self.model(torch.tensor(encoded_state, device=self.model.device).unsqueeze(0))
-                policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
+                policy = torch.softmax(policy, dim=1).squeeze(0).cpu().numpy()
                 valid_move_fields = encoded_state[1].reshape(-1)
                 policy *= valid_move_fields
                 policy /= np.sum(policy)
@@ -110,7 +110,7 @@ class MCTS:
 
         action_probs = np.zeros(self.game.size ** 2)
         for child in root.children:
-            action_probs[self.game.coordinates_to_scalar(child.action_taken)] = child.visit_count
+            action_probs[self.game.coordinate_to_scalar(self.game.recode_coordinates(child.action_taken))] = child.visit_count
         action_probs /= np.sum(action_probs)
         return action_probs
 
@@ -118,11 +118,18 @@ class MCTS:
 if __name__ == "__main__":
     args = {
         'C': 2,
-        'num_searches': 1000
+        'num_searches': 60,
+        'num_iterations': 3,
+        'num_selfPlay_iterations': 500,
+        'num_epochs': 4,
+        'batch_size': 64,
+        'temperature': 1.25,
+        'dirichlet_epsilon': 0.25,
+        'dirichlet_alpha': 0.3
     }
 
-    game = hex_engine.hexPosition(size=3)
-    model = ResNet(game, 4, 64)
+    game = hex_engine.hexPosition(size=5)
+    model = ResNet(game, 4, 64, device="cpu")
     model.eval()
     mcts = MCTS(game, args, model)
 
@@ -142,7 +149,7 @@ if __name__ == "__main__":
             game.board = game.recode_black_as_white()
             game.player = 1
             mcts_probs = mcts.search()
-            action = game.recode_coordinates(game.get_action_space()[np.argmax(mcts_probs)])
+            action = game.recode_coordinates(game.scalar_to_coordinates(np.argmax(mcts_probs)))
             game.board = game.recode_black_as_white()
             game.player = -1
 
