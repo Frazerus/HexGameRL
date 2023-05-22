@@ -26,8 +26,10 @@ class ResBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, game, num_resBlocks, num_hidden):
+    def __init__(self, game, num_resBlocks, num_hidden, device):
         super().__init__()
+
+        self.device = device
         self.startBlock = nn.Sequential(
             nn.Conv2d(3, num_hidden, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_hidden),
@@ -55,6 +57,8 @@ class ResNet(nn.Module):
             nn.Tanh()
         )
 
+        self.to(device)
+
     def forward(self, x):
         x = self.startBlock(x)
         for resBlock in self.backBone:
@@ -64,26 +68,27 @@ class ResNet(nn.Module):
         return policy, value
 
 
-game = hex_engine.hexPosition()
+if __name__ == "__main__":
+    game = hex_engine.hexPosition()
 
-for _ in range(5):
-    game.moove(random.choice(game.get_action_space()))
+    for _ in range(5):
+        game.moove(random.choice(game.get_action_space()))
 
-game.print()
-print(game.board)
-board = np.array(game.board)
-print(board)
-encoded_state = np.stack(
-    (board == 1, board == 0, board == -1)
-).astype(np.float32)
+    game.print()
+    print(game.board)
+    board = np.array(game.board)
+    print(board)
+    encoded_state = np.stack(
+        (board == 1, board == 0, board == -1)
+    ).astype(np.float32)
 
-print(encoded_state[1].flatten())
+    print(encoded_state[1].flatten())
 
-tensor_state = torch.tensor(encoded_state).unsqueeze(0)
+    tensor_state = torch.tensor(encoded_state).unsqueeze(0)
 
-model = ResNet(game, 4, 64)
-policy, value = model(tensor_state)
-value = value.item()
-policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy()
+    model = ResNet(game, 4, 64)
+    policy, value = model(tensor_state)
+    value = value.item()
+    policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy()
 
-print(value, policy)
+    print(value, policy)

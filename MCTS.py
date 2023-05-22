@@ -74,6 +74,18 @@ class MCTS:
     @torch.no_grad()
     def search(self):
         root = Node(self.game, self.args)
+        root.visit_count = 1
+
+        state = np.array(root.game.board)
+        encoded_state = np.stack((state == 1, state == 0, state == -1)).astype(np.float32)
+        policy, _ = self.model(torch.tensor(encoded_state, device=self.model.device).unsqueeze(0))
+        policy = torch.softmax(policy, axis=1).squeeze(0).numpy()
+        policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] * np.random.dirichlet(
+            [self.args['dirichlet_alpha']] * (self.game.size ** 2))
+        valid_move_fields = encoded_state[1].reshape(-1)
+        policy *= valid_move_fields
+        policy /= np.sum(policy)
+        root.expand(policy)
 
         for search in range(self.args['num_searches']):
             node = root
@@ -86,7 +98,7 @@ class MCTS:
             if not is_terminal:
                 state = np.array(node.game.board)
                 encoded_state = np.stack((state == 1, state == 0, state == -1)).astype(np.float32)
-                policy, value = self.model(torch.tensor(encoded_state).unsqueeze(0))
+                policy, value = self.model(torch.tensor(encoded_state, device=self.model.device).unsqueeze(0))
                 policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
                 valid_move_fields = encoded_state[1].reshape(-1)
                 policy *= valid_move_fields
@@ -103,38 +115,39 @@ class MCTS:
         return action_probs
 
 
-args = {
-    'C': 2,
-    'num_searches': 1000
-}
+if __name__ == "__main__":
+    args = {
+        'C': 2,
+        'num_searches': 1000
+    }
 
-game = hex_engine.hexPosition(size=3)
-model = ResNet(game, 4, 64)
-model.eval()
-mcts = MCTS(game, args, model)
+    game = hex_engine.hexPosition(size=3)
+    model = ResNet(game, 4, 64)
+    model.eval()
+    mcts = MCTS(game, args, model)
 
-while True:
-    game.print()
+    while True:
+        game.print()
 
-    if game.player == 1:
-        valid_moves = game.get_action_space()
-        print(valid_moves)
-        action = tuple(map(int, input(f'action:').split(',')))
+        if game.player == 1:
+            valid_moves = game.get_action_space()
+            print(valid_moves)
+            action = tuple(map(int, input(f'action:').split(',')))
 
-        if action not in valid_moves:
-            print("not valid")
-            continue
+            if action not in valid_moves:
+                print("not valid")
+                continue
 
-    else:
-        game.board = game.recode_black_as_white()
-        game.player = 1
-        mcts_probs = mcts.search()
-        action = game.recode_coordinates(game.get_action_space()[np.argmax(mcts_probs)])
-        game.board = game.recode_black_as_white()
-        game.player = -1
+        else:
+            game.board = game.recode_black_as_white()
+            game.player = 1
+            mcts_probs = mcts.search()
+            action = game.recode_coordinates(game.get_action_space()[np.argmax(mcts_probs)])
+            game.board = game.recode_black_as_white()
+            game.player = -1
 
-    game.moove(action)
-    if game.winner != 0:
-        print(game.winner)
-        break
+        game.moove(action)
+        if game.winner != 0:
+            print(game.winner)
+            break
 
