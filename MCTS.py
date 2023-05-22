@@ -1,6 +1,5 @@
 import numpy as np
 import math
-from random import choice
 
 import torch
 
@@ -79,7 +78,7 @@ class MCTS:
         state = np.array(root.game.board)
         encoded_state = np.stack((state == 1, state == 0, state == -1)).astype(np.float32)
         policy, _ = self.model(torch.tensor(encoded_state, device=self.model.device).unsqueeze(0))
-        policy = torch.softmax(policy, axis=1).squeeze(0).numpy()
+        policy = torch.softmax(policy, dim=1).squeeze(0).numpy()
         policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] * np.random.dirichlet(
             [self.args['dirichlet_alpha']] * (self.game.size ** 2))
         valid_move_fields = encoded_state[1].reshape(-1)

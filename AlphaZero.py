@@ -29,7 +29,8 @@ class AlphaZero:
 
             action_probs = self.mcts.search()
 
-            memory.append((np.stack((self.game.board == 1, self.game.board == 0, self.game.board == -1)).astype(np.float32), action_probs, actual_player))
+            state = np.array(self.game.board)
+            memory.append((np.stack((state == 1, state == 0, state == -1)).astype(np.float32), action_probs, actual_player))
 
             temperature_action_probs = action_probs ** (1 / self.args['temperature'])
             temperature_action_probs /= sum(temperature_action_probs)
@@ -83,6 +84,7 @@ class AlphaZero:
 
             self.model.eval()
             for selfPlay_iteration in trange(self.args['num_selfPlay_iterations']):
+                print(selfPlay_iteration, "selfplay")
                 memory += self.selfPlay()
 
             self.model.train()
@@ -95,16 +97,16 @@ class AlphaZero:
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    game = hex_engine.hexPosition()
+    game = hex_engine.hexPosition(size=3)
     model = ResNet(game, 4, 64, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
     args = {
         'C': 2,
         'num_searches': 60,
         'num_iterations': 3,
-        'num_selfPlay_iterations': 500,
+        'num_selfPlay_iterations': 20,
         'num_epochs': 4,
-        'batch_size': 64,
+        'batch_size': 10,
         'temperature': 1.25,
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.3
