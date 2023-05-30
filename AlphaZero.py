@@ -145,16 +145,16 @@ if __name__ == "__main__":
     args = {
         'C': 2,
         'num_searches': 100,
-        'num_iterations': 1000,
-        'num_selfPlay_iterations': 100,
+        'num_iterations': 10,
+        'num_selfPlay_iterations': 50,
         'num_parallel_games': 10,
         'num_epochs': 4,
-        'batch_size': 10,
+        'batch_size': 32,
         'temperature': 1.25,
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.3,
         'num_eval_games': 200,
-        'game_size': 3
+        'game_size': 7
     }
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     game = hex_engine.hexPosition(size=args['game_size'])
