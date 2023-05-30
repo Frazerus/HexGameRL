@@ -5,7 +5,6 @@ from random import choice
 import numpy as np
 import torch
 
-from REIL.HexGameRL.MCTS import MCTS
 from REIL.HexGameRL.Model import ResNet
 from REIL.HexGameRL.engine import hex_engine
 import os
@@ -38,6 +37,8 @@ class Eval:
         model1_model2 = [0, 0]
 
         for i in range(iterations):
+            if i % 100 == 0:
+                print(f'MODEL VS RANDOM - -ITERATION {i}')
             self.game.reset()
             while True:
                 if self.game.player == 1:
@@ -59,8 +60,6 @@ class Eval:
                     self.game.board = self.game.recode_black_as_white()
                     self.game.player = -1
 
-                self.game.print()
-                print(action)
                 self.game.moove(action)
                 if self.game.winner != 0 or len(self.game.get_action_space()) == 0:
                     model1_model2[0 if self.game.winner == 1 else 1] += 1
@@ -72,6 +71,8 @@ class Eval:
         model_random = [0, 0]
 
         for i in range(iterations):
+            if i % 100 == 0:
+                print(f'MODEL VS RANDOM - ITERATION {i}')
             self.game.reset()
             while True:
                 if self.game.player == 1:
@@ -94,15 +95,17 @@ class Eval:
 if __name__ == "__main__":
     args = {
         'C': 2,
-        'num_searches': 600,
+        'num_searches': 100,
         'num_iterations': 1000,
-        'num_selfPlay_iterations': 500,
-        'num_parallel_games': 100,
+        'num_selfPlay_iterations': 100,
+        'num_parallel_games': 10,
         'num_epochs': 4,
-        'batch_size': 128,
+        'batch_size': 10,
         'temperature': 1.25,
         'dirichlet_epsilon': 0.25,
-        'dirichlet_alpha': 0.3
+        'dirichlet_alpha': 0.3,
+        'num_eval_games': 200,
+        'game_size': 7
     }
 
     eval = Eval(args)

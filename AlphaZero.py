@@ -4,11 +4,10 @@ from copy import deepcopy
 import numpy as np
 import torch
 import torch.nn.functional as F
-from tqdm.notebook import trange
 from random import shuffle
 
 from REIL.HexGameRL.Eval import Eval
-from REIL.HexGameRL.MCTS import MCTS, MCTSParallel
+from REIL.HexGameRL.MCTS import MCTSParallel
 from REIL.HexGameRL.Model import ResNet
 from REIL.HexGameRL.engine import hex_engine
 from REIL.HexGameRL.util import get_encoded_state, get_state, get_value_and_terminated
@@ -103,32 +102,39 @@ class AlphaZero:
             value_loss = F.mse_loss(out_value, value_targets)
             loss = policy_loss + value_loss
 
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
+            self.optimizer.step()
 
     def learn(self):
-        ev = Eval(self.args, size=4)
+        ev = Eval(self.args, size=args['game_size'])
         for iteration in range(self.args['num_iterations']):
             memory = []
 
             self.model.eval()
-            for _ in trange(self.args['num_selfPlay_iterations'] // self.args['num_parallel_games']):
+            for selfplays in range(self.args['num_selfPlay_iterations'] // self.args['num_parallel_games']):
+                print(f'ITERATION {iteration} - SELFPLAY {selfplays}')
                 memory += self.selfPlay()
 
             self.model.train()
-            for _ in trange(self.args['num_epochs']):
+            for epoch in range(self.args['num_epochs']):
+                print(f'ITERATION {iteration} - EPOCH {epoch}')
                 self.train(memory)
 
             self.model.eval()
             ev.load_models()
-            win_loss = [ev.model_vs_random(self.model, 100)]
-            for m in ev.models:
-                win_loss.append(ev.model_vs_model(self.model, m, 100))
 
-            with open(os.path.join(os.getcwd(), 'results.txt'),  'a+') as f:
+            print(f'ITERATION {iteration} - EVAL VS RANDOM:')
+            win_loss = [ev.model_vs_random(self.model, self.args['num_eval_games'])]
+            for idx, m in enumerate(ev.models):
+                print(f'ITERATION {iteration} - EVAL VS MODEL {idx + 1}:')
+                win_loss.append(ev.model_vs_model(self.model, m, self.args['num_eval_games']))
+
+            with open(os.path.join(os.getcwd(), 'results.csv'),  'a+') as f:
                 for wl in win_loss:
-                    f.write(','.join(map(str, wl)) + ';')
+                    f.write(str(wl[0] / self.args['num_eval_games'] * 100) + ',')
+                for _ in range(len(win_loss), self.args['num_iterations'] + 2):
+                    f.write(',')
                 f.write('\n')
 
             torch.save(self.model.state_dict(), os.path.join(os.getcwd(), 'models', f"model_{iteration + 1}.pt"))
@@ -136,22 +142,23 @@ class AlphaZero:
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    game = hex_engine.hexPosition(size=4)
-    model = ResNet(game, 9, 128, device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
     args = {
         'C': 2,
-        'num_searches': 10,
+        'num_searches': 100,
         'num_iterations': 1000,
-        'num_selfPlay_iterations': 50,
+        'num_selfPlay_iterations': 100,
         'num_parallel_games': 10,
         'num_epochs': 4,
-        'batch_size': 128,
+        'batch_size': 10,
         'temperature': 1.25,
         'dirichlet_epsilon': 0.25,
-        'dirichlet_alpha': 0.3
+        'dirichlet_alpha': 0.3,
+        'num_eval_games': 200,
+        'game_size': 3
     }
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    game = hex_engine.hexPosition(size=args['game_size'])
+    model = ResNet(game, 9, 128, device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
     alphaZero = AlphaZero(model, optimizer, game, args)
     alphaZero.learn()
