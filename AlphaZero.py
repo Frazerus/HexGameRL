@@ -1,11 +1,38 @@
+import os
+from copy import deepcopy
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm.notebook import trange
-from random import choices, shuffle
-from REIL.HexGameRL.MCTS import MCTS
+from random import shuffle
+
+from REIL.HexGameRL.Eval import Eval
+from REIL.HexGameRL.MCTS import MCTS, MCTSParallel
 from REIL.HexGameRL.Model import ResNet
 from REIL.HexGameRL.engine import hex_engine
+from REIL.HexGameRL.util import get_encoded_state, get_state, get_value_and_terminated
+
+
+class SelfPlayGame:
+    def __init__(self, game):
+        self.game = deepcopy(game)
+        self.actual_player = 1
+        self.memory = []
+        self.root = None
+        self.node = None
+
+    def to_neutral_state(self):
+        if self.game.player == -1:
+            self.game.board = self.game.recode_black_as_white()
+            self.game.player = 1
+            self.actual_player = -1
+
+    def to_original_state(self):
+        if self.actual_player == -1:
+            self.game.board = self.game.recode_black_as_white()
+            self.game.player = 1
+            self.actual_player = 1
 
 
 class AlphaZero:
@@ -14,52 +41,54 @@ class AlphaZero:
         self.optimizer = optimizer
         self.game = game
         self.args = args
-        self.mcts = MCTS(game, args, model)
+        self.mcts = MCTSParallel(game, args, model)
 
     def selfPlay(self):
-        memory = []
         self.game.reset()
-        actual_player = 1
+        return_memory = []
+        spGames = [SelfPlayGame(self.game) for _ in range(self.args['num_parallel_games'])]
 
-        while True:
-            if self.game.player == -1:
-                self.game.board = self.game.recode_black_as_white()
-                self.game.player = 1
-                actual_player = -1
+        while len(spGames) > 0:
+            for spg in spGames:
+                spg.to_neutral_state()
+            states = np.stack([get_state(spg.game) for spg in spGames])
+            self.mcts.search(states, spGames)
 
-            action_probs = self.mcts.search()
+            for i in range(len(spGames))[::-1]:
+                spg = spGames[i]
+                action_probs = np.zeros(self.game.size ** 2)
+                for child in spg.root.children:
+                    action_probs[self.game.coordinate_to_scalar(self.game.recode_coordinates(child.action_taken))] = child.visit_count
+                action_probs /= np.sum(action_probs)
+                spg.memory.append((get_state(spg.root.game), action_probs, spg.actual_player))
 
-            state = np.array(self.game.board)
-            memory.append((np.stack((state == 1, state == 0, state == -1)).astype(np.float32), action_probs, actual_player))
+                temperature_action_probs = action_probs ** (1 / self.args['temperature'])
+                temperature_action_probs /= sum(temperature_action_probs)
+                action = spg.game.scalar_to_coordinates(np.random.choice(self.game.size ** 2, p=temperature_action_probs))
 
-            temperature_action_probs = action_probs ** (1 / self.args['temperature'])
-            temperature_action_probs /= sum(temperature_action_probs)
-            action = self.game.scalar_to_coordinates(np.random.choice(self.game.size ** 2, p=temperature_action_probs))
+                spg.game.moove(action)
 
-            self.game.moove(action)
+                value, is_terminal = get_value_and_terminated(spg.game)
 
-            value, is_terminal = self.game.winner, self.game.winner != 0 or len(self.game.get_action_space()) == 0
+                if is_terminal:
+                    for hist_game_state, hist_action_probs, hist_player in spg.memory:
+                        hist_outcome = value if hist_player == spg.actual_player else -value
+                        return_memory.append((
+                            get_encoded_state(hist_game_state),
+                            hist_action_probs,
+                            hist_outcome
+                        ))
+                    del spGames[i]
 
-            if is_terminal:
-                returnMemory = []
-                for hist_game_state, hist_action_probs, hist_player in memory:
-                    hist_outcome = value if hist_player == actual_player else -value
-                    returnMemory.append((
-                        hist_game_state,
-                        hist_action_probs,
-                        hist_outcome
-                    ))
-                return returnMemory
+            for spg in spGames:
+                spg.to_original_state()
 
-            if actual_player == -1:
-                self.game.board = self.game.recode_black_as_white()
-                self.game.player = 1
-                actual_player = 1
+        return return_memory
 
     def train(self, memory):
         shuffle(memory)
         for batch_idx in range(0, len(memory), self.args['batch_size']):
-            sample = memory[batch_idx:min(len(memory) - 1, batch_idx + self.args['batch_size'])]
+            sample = memory[batch_idx:min(len(memory), batch_idx + self.args['batch_size'])]
             state, policy_targets, value_targets = zip(*sample)
 
             state, policy_targets, value_targets = np.array(state), np.array(policy_targets), np.array(value_targets).reshape(-1, 1)
@@ -79,34 +108,46 @@ class AlphaZero:
             optimizer.step()
 
     def learn(self):
+        ev = Eval(self.args, size=4)
         for iteration in range(self.args['num_iterations']):
             memory = []
 
             self.model.eval()
-            for selfPlay_iteration in trange(self.args['num_selfPlay_iterations']):
-                print(selfPlay_iteration, "selfplay")
+            for _ in trange(self.args['num_selfPlay_iterations'] // self.args['num_parallel_games']):
                 memory += self.selfPlay()
 
             self.model.train()
-            for epoch in trange(self.args['num_epochs']):
+            for _ in trange(self.args['num_epochs']):
                 self.train(memory)
 
-            torch.save(self.model.state_dict(), f"model_{iteration}.pt")
-            torch.save(self.optimizer.state_dict(), f"optimizer_{iteration}.pt")
+            self.model.eval()
+            ev.load_models()
+            win_loss = [ev.model_vs_random(self.model, 100)]
+            for m in ev.models:
+                win_loss.append(ev.model_vs_model(self.model, m, 100))
+
+            with open(os.path.join(os.getcwd(), 'results.txt'),  'a+') as f:
+                for wl in win_loss:
+                    f.write(','.join(map(str, wl)) + ';')
+                f.write('\n')
+
+            torch.save(self.model.state_dict(), os.path.join(os.getcwd(), 'models', f"model_{iteration + 1}.pt"))
+            torch.save(self.optimizer.state_dict(), os.path.join(os.getcwd(), 'models', f"optimizer_{iteration + 1}.pt"))
 
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    game = hex_engine.hexPosition(size=3)
-    model = ResNet(game, 4, 64, device)
+    game = hex_engine.hexPosition(size=4)
+    model = ResNet(game, 9, 128, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
     args = {
         'C': 2,
-        'num_searches': 60,
-        'num_iterations': 3,
-        'num_selfPlay_iterations': 20,
+        'num_searches': 10,
+        'num_iterations': 1000,
+        'num_selfPlay_iterations': 50,
+        'num_parallel_games': 10,
         'num_epochs': 4,
-        'batch_size': 10,
+        'batch_size': 128,
         'temperature': 1.25,
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.3

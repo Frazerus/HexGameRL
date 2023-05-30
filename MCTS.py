@@ -4,6 +4,7 @@ import math
 import torch
 
 from REIL.HexGameRL.Model import ResNet
+from REIL.HexGameRL.util import get_encoded_state, get_valid_moves, get_value_and_terminated, get_state
 from engine import hex_engine
 from copy import deepcopy
 
@@ -75,14 +76,15 @@ class MCTS:
         root = Node(self.game, self.args)
         root.visit_count = 1
 
-        state = np.array(root.game.board)
-        encoded_state = np.stack((state == 1, state == 0, state == -1)).astype(np.float32)
-        policy, _ = self.model(torch.tensor(encoded_state, device=self.model.device).unsqueeze(0))
-        policy = torch.softmax(policy, dim=1).squeeze(0).numpy()
+        encoded_state = get_encoded_state(get_state(root.game))
+        policy, _ = self.model(
+            torch.tensor(encoded_state, device=self.model.device).unsqueeze(0)
+        )
+        policy = torch.softmax(policy, dim=1).squeeze(0).cpu().numpy()
         policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] * np.random.dirichlet(
             [self.args['dirichlet_alpha']] * (self.game.size ** 2))
-        valid_move_fields = encoded_state[1].reshape(-1)
-        policy *= valid_move_fields
+        valid_moves = get_valid_moves(encoded_state)
+        policy *= valid_moves
         policy /= np.sum(policy)
         root.expand(policy)
 
@@ -92,15 +94,14 @@ class MCTS:
             while node.is_fully_expanded():
                 node = node.select()
 
-            value, is_terminal = node.game.winner, node.game.winner != 0 or len(node.game.get_action_space()) == 0
+            value, is_terminal = get_value_and_terminated(node.game)
 
             if not is_terminal:
-                state = np.array(node.game.board)
-                encoded_state = np.stack((state == 1, state == 0, state == -1)).astype(np.float32)
+                encoded_state = get_encoded_state(get_state(node.game))
                 policy, value = self.model(torch.tensor(encoded_state, device=self.model.device).unsqueeze(0))
                 policy = torch.softmax(policy, dim=1).squeeze(0).cpu().numpy()
-                valid_move_fields = encoded_state[1].reshape(-1)
-                policy *= valid_move_fields
+                valid_moves = get_valid_moves(encoded_state)
+                policy *= valid_moves
                 policy /= np.sum(policy)
                 value = value.item()
                 node.expand(policy)
@@ -112,6 +113,67 @@ class MCTS:
             action_probs[self.game.coordinate_to_scalar(self.game.recode_coordinates(child.action_taken))] = child.visit_count
         action_probs /= np.sum(action_probs)
         return action_probs
+
+
+class MCTSParallel:
+    def __init__(self, game, args, model):
+        self.game = game
+        self.args = args
+        self.model = model
+
+    @torch.no_grad()
+    def search(self, states, spGames):
+        policy, _ = self.model(torch.tensor(get_encoded_state(states), device=self.model.device))
+        policy = torch.softmax(policy, dim=1).cpu().numpy()
+        policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] * np.random.dirichlet([self.args['dirichlet_alpha']] * (self.game.size ** 2))
+
+        for i, spg in enumerate(spGames):
+            spg_policy = policy[i]
+            valid_moves = get_valid_moves(get_encoded_state(states[i]))
+            spg_policy *= valid_moves
+            spg_policy /= np.sum(spg_policy)
+
+            spg.root = Node(spg.game, self.args)
+            spg.root.visit_count = 1
+            spg.root.expand(spg_policy)
+
+        for search in range(self.args['num_searches']):
+            for spg in spGames:
+                spg.node = None
+                node = spg.root
+
+                while node.is_fully_expanded():
+                    node = node.select()
+
+                value, is_terminal = get_value_and_terminated(node.game)
+
+                if is_terminal:
+                    node.backpropagate(value)
+
+                else:
+                    spg.node = node
+
+            expandable_spGames = [mappingIdx for mappingIdx in range(len(spGames)) if spGames[mappingIdx].node is not None]
+
+            if len(expandable_spGames) > 0:
+                states = np.stack([get_state(spGames[mappingIdx].node.game) for mappingIdx in expandable_spGames])
+
+                policy, value = self.model(
+                    torch.tensor(get_encoded_state(states), device=self.model.device)
+                )
+                policy = torch.softmax(policy, dim=1).cpu().numpy()
+                value = value.cpu().numpy()
+
+            for i, mappingIdx in enumerate(expandable_spGames):
+                node = spGames[mappingIdx].node
+                spg_policy, spg_value = policy[i], value[i]
+
+                valid_moves = get_valid_moves(get_encoded_state(get_state(node.game)))
+                spg_policy *= valid_moves
+                spg_policy /= np.sum(spg_policy)
+
+                node.expand(spg_policy)
+                node.backpropagate(spg_value)
 
 
 if __name__ == "__main__":
@@ -127,7 +189,7 @@ if __name__ == "__main__":
         'dirichlet_alpha': 0.3
     }
 
-    game = hex_engine.hexPosition(size=5)
+    game = hex_engine.hexPosition(size=3)
     model = ResNet(game, 4, 64, device="cpu")
     model.eval()
     mcts = MCTS(game, args, model)
