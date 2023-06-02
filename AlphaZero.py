@@ -1,9 +1,11 @@
 import os
+import time
 from copy import deepcopy
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+import random
 from random import shuffle
 
 from REIL.HexGameRL.Eval import Eval
@@ -57,13 +59,15 @@ class AlphaZero:
                 spg = spGames[i]
                 action_probs = np.zeros(self.game.size ** 2)
                 for child in spg.root.children:
-                    action_probs[self.game.coordinate_to_scalar(self.game.recode_coordinates(child.action_taken))] = child.visit_count
+                    action_probs[self.game.coordinate_to_scalar(
+                        self.game.recode_coordinates(child.action_taken))] = child.visit_count
                 action_probs /= np.sum(action_probs)
                 spg.memory.append((get_state(spg.root.game), action_probs, spg.actual_player))
 
                 temperature_action_probs = action_probs ** (1 / self.args['temperature'])
                 temperature_action_probs /= sum(temperature_action_probs)
-                action = spg.game.scalar_to_coordinates(np.random.choice(self.game.size ** 2, p=temperature_action_probs))
+                action = spg.game.scalar_to_coordinates(
+                    np.random.choice(self.game.size ** 2, p=temperature_action_probs))
 
                 spg.game.moove(action)
 
@@ -90,7 +94,8 @@ class AlphaZero:
             sample = memory[batch_idx:min(len(memory), batch_idx + self.args['batch_size'])]
             state, policy_targets, value_targets = zip(*sample)
 
-            state, policy_targets, value_targets = np.array(state), np.array(policy_targets), np.array(value_targets).reshape(-1, 1)
+            state, policy_targets, value_targets = np.array(state), np.array(policy_targets), np.array(
+                value_targets).reshape(-1, 1)
 
             state = torch.tensor(state, dtype=torch.float32, device=self.model.device)
             policy_targets = torch.tensor(policy_targets, dtype=torch.float32, device=self.model.device)
@@ -107,7 +112,9 @@ class AlphaZero:
             self.optimizer.step()
 
     def learn(self):
-        ev = Eval(self.args, size=args['game_size'])
+        start_time = time.perf_counter()
+        print('STARTED AT:', str(start_time))
+        ev = Eval(self.args, size=self.args['game_size'])
         for iteration in range(self.args['num_iterations']):
             memory = []
 
@@ -117,6 +124,7 @@ class AlphaZero:
                 memory += self.selfPlay()
 
             self.model.train()
+            print(f'TRAINING - MEMORY LEN: {len(memory)}')
             for epoch in range(self.args['num_epochs']):
                 print(f'ITERATION {iteration} - EPOCH {epoch}')
                 self.train(memory)
@@ -124,41 +132,86 @@ class AlphaZero:
             self.model.eval()
             ev.load_models()
 
-            print(f'ITERATION {iteration} - EVAL VS RANDOM:')
-            win_loss = [ev.model_vs_random(self.model, self.args['num_eval_games'])]
-            for idx, m in enumerate(ev.models):
-                print(f'ITERATION {iteration} - EVAL VS MODEL {idx + 1}:')
-                win_loss.append(ev.model_vs_model(self.model, m, self.args['num_eval_games']))
+            memory = []
 
-            with open(os.path.join(os.getcwd(), 'results.csv'),  'a+') as f:
+            print(f'ITERATION {iteration} - EVAL VS RANDOM')
+            win_loss = [ev.model_vs_random(self.model, self.args['num_eval_games'])]
+            print(str(win_loss[0][0] / self.args['num_eval_games'] * 100))
+
+            if len(ev.models) != 0:
+                for idx, m in enumerate(ev.models):
+                    print(f'ITERATION {iteration} - VS MODEL {idx + 1}:')
+                    if self.args['reinforce']:
+                        wr, reinf_memory = ev.model_vs_model_mem(self.model, m, min(1, self.args['num_selfPlay_iterations'] // len(ev.models)))
+                        win_loss.append(wr)
+                        memory += reinf_memory
+                    else:
+                        win_loss.append(ev.model_vs_model(self.model, m, min(1, self.args['num_selfPlay_iterations'] // len(ev.models))))
+
+            with open(os.path.join(os.getcwd(), self.args['result_output_file']), 'a+') as f:
                 for wl in win_loss:
-                    f.write(str(wl[0] / self.args['num_eval_games'] * 100) + ',')
+                    f.write(str(wl[0] / (wl[0] + wl[1]) * 100) + ',')
                 for _ in range(len(win_loss), self.args['num_iterations'] + 2):
                     f.write(',')
                 f.write('\n')
+            print([str(wl[0] / (wl[0] + wl[1]) * 100) for wl in win_loss])
 
-            torch.save(self.model.state_dict(), os.path.join(os.getcwd(), 'models', f"model_{iteration + 1}.pt"))
-            torch.save(self.optimizer.state_dict(), os.path.join(os.getcwd(), 'models', f"optimizer_{iteration + 1}.pt"))
+            torch.save(self.model.state_dict(), os.path.join(os.getcwd(), self.args['model_output_folder'], f"model_{iteration + 1}.pt"))
+            torch.save(self.optimizer.state_dict(),
+                       os.path.join(os.getcwd(), self.args['model_output_folder'], f"optimizer_{iteration + 1}.pt"))
+
+            if self.args['reinforce']:
+                memory = [entry for entry in memory if entry[2] == -1]
+                if len(memory) != 0:
+                    self.model.train()
+                    for epoch in range(self.args['num_reinforce_epochs']):
+                        print(f'ITERATION {iteration} - REINFORCE EPOCH {epoch}')
+                        self.train(memory)
+            elapsed = time.perf_counter() - start_time
+            if elapsed > self.args['time_limit_s'] or iteration == (self.args['num_iterations'] - 1):
+                print('ENDED AT:', str(start_time + elapsed))
+                print('ELAPSED:', str(elapsed))
+                print(str(iteration + 1), 'ITERATIONS')
+                exit(0)
 
 
 if __name__ == "__main__":
+    torch.manual_seed(0)
+    random.seed(0)
+    np.random.seed(0)
+
     args = {
-        'C': 2,
-        'num_searches': 100,
-        'num_iterations': 10,
-        'num_selfPlay_iterations': 50,
-        'num_parallel_games': 10,
+        'C': 1.4,
+        'num_searches': 150,
+        'num_iterations': 100,
+        'num_selfPlay_iterations': 100,
+        'num_parallel_games': 20,
         'num_epochs': 4,
         'batch_size': 32,
         'temperature': 1.25,
         'dirichlet_epsilon': 0.25,
         'dirichlet_alpha': 0.3,
-        'num_eval_games': 200,
-        'game_size': 7
+        'num_eval_games': 1000,
+        'game_size': 3,
+        'reinforce': True,
+        'num_reinforce_epochs': 4,
+        'model_output_folder': 'models',
+        'result_output_file': 'results.csv',
+        'time_limit_s': 36000
     }
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     game = hex_engine.hexPosition(size=args['game_size'])
     model = ResNet(game, 9, 128, device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
+
+    ev = Eval(args, size=args['game_size'])
+    print('INIT VS RANDOM ASSESSMENT')
+    baseline = ev.model_vs_random(model, args['num_eval_games'])[0] / args['num_eval_games'] * 100
+    print(str(baseline))
+    with open(os.path.join(os.getcwd(), args['result_output_file']), 'a+') as f:
+        f.write(str(baseline) + ',')
+        for _ in range(args['num_iterations'] + 1):
+            f.write(',')
+        f.write('\n')
     alphaZero = AlphaZero(model, optimizer, game, args)
     alphaZero.learn()
