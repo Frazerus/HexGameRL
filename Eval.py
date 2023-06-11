@@ -5,11 +5,11 @@ from random import choice
 import numpy as np
 import torch
 
-from REIL.HexGameRL.Model import ResNet
-from REIL.HexGameRL.engine import hex_engine
+from Model import ResNet
+from engine import hex_engine
 import os
 
-from REIL.HexGameRL.util import get_state, get_encoded_state, get_valid_moves
+from util import get_state, get_encoded_state, get_valid_moves
 
 
 class Eval:
@@ -37,7 +37,7 @@ class Eval:
     def model_vs_model(self, model1, model2, iterations):
         model1_model2 = [0, 0]
 
-        for i in range(iterations):
+        for i in range(iterations + 1):
             self.game.reset()
             while True:
                 if self.game.player == 1:
@@ -69,7 +69,7 @@ class Eval:
     def model_vs_random(self, model, iterations):
         model_random = [0, 0]
 
-        for i in range(iterations):
+        for i in range(iterations + 1):
             self.game.reset()
             while True:
                 if self.game.player == 1:
@@ -93,7 +93,7 @@ class Eval:
         return_memory = []
         model1_model2 = [0, 0]
 
-        for i in range(iterations):
+        for i in range(iterations + 1):
             self.game.reset()
             memory = []
             while True:
@@ -136,24 +136,3 @@ class Eval:
                     break
         return model1_model2, return_memory
 
-
-if __name__ == "__main__":
-    args = {
-        'C': 2,
-        'num_searches': 100,
-        'num_iterations': 1000,
-        'num_selfPlay_iterations': 100,
-        'num_parallel_games': 10,
-        'num_epochs': 4,
-        'batch_size': 10,
-        'temperature': 1.25,
-        'dirichlet_epsilon': 0.25,
-        'dirichlet_alpha': 0.3,
-        'num_eval_games': 200,
-        'game_size': 7
-    }
-
-    eval = Eval(args)
-    eval.load_models()
-    print(eval.model_vs_model(eval.models[0], eval.models[1]))
-    print(eval.model_vs_random(eval.models[0]))

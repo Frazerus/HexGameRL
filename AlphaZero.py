@@ -5,14 +5,14 @@ from copy import deepcopy
 import numpy as np
 import torch
 import torch.nn.functional as F
-import random
 from random import shuffle
 
-from REIL.HexGameRL.Eval import Eval
-from REIL.HexGameRL.MCTS import MCTSParallel
-from REIL.HexGameRL.Model import ResNet
-from REIL.HexGameRL.engine import hex_engine
-from REIL.HexGameRL.util import get_encoded_state, get_state, get_value_and_terminated
+from Eval import Eval
+from MCTS import MCTS, MCTSParallel
+from Model import ResNet
+from engine import hex_engine
+from util import get_encoded_state, get_state, get_value_and_terminated
+
 
 
 class SelfPlayGame:
@@ -156,9 +156,9 @@ class AlphaZero:
                 f.write('\n')
             print([str(wl[0] / (wl[0] + wl[1]) * 100) for wl in win_loss])
 
-            torch.save(self.model.state_dict(), os.path.join(os.getcwd(), self.args['model_output_folder'], f"model_{iteration + 1}.pt"))
+            torch.save(self.model.state_dict(), os.path.join(os.getcwd(), self.args['model_output_folder'], f"model_{iteration + 1 + self.args['iteration_offset']}.pt"))
             torch.save(self.optimizer.state_dict(),
-                       os.path.join(os.getcwd(), self.args['model_output_folder'], f"optimizer_{iteration + 1}.pt"))
+                       os.path.join(os.getcwd(), self.args['model_output_folder'], f"optimizer_{iteration + 1 + self.args['iteration_offset']}.pt"))
 
             if self.args['reinforce']:
                 memory = [entry for entry in memory if entry[2] == -1]
@@ -173,45 +173,3 @@ class AlphaZero:
                 print('ELAPSED:', str(elapsed))
                 print(str(iteration + 1), 'ITERATIONS')
                 exit(0)
-
-
-if __name__ == "__main__":
-    torch.manual_seed(0)
-    random.seed(0)
-    np.random.seed(0)
-
-    args = {
-        'C': 1.4,
-        'num_searches': 150,
-        'num_iterations': 100,
-        'num_selfPlay_iterations': 100,
-        'num_parallel_games': 20,
-        'num_epochs': 4,
-        'batch_size': 32,
-        'temperature': 1.25,
-        'dirichlet_epsilon': 0.25,
-        'dirichlet_alpha': 0.3,
-        'num_eval_games': 1000,
-        'game_size': 3,
-        'reinforce': True,
-        'num_reinforce_epochs': 4,
-        'model_output_folder': 'models',
-        'result_output_file': 'results.csv',
-        'time_limit_s': 36000
-    }
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    game = hex_engine.hexPosition(size=args['game_size'])
-    model = ResNet(game, 9, 128, device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
-
-    ev = Eval(args, size=args['game_size'])
-    print('INIT VS RANDOM ASSESSMENT')
-    baseline = ev.model_vs_random(model, args['num_eval_games'])[0] / args['num_eval_games'] * 100
-    print(str(baseline))
-    with open(os.path.join(os.getcwd(), args['result_output_file']), 'a+') as f:
-        f.write(str(baseline) + ',')
-        for _ in range(args['num_iterations'] + 1):
-            f.write(',')
-        f.write('\n')
-    alphaZero = AlphaZero(model, optimizer, game, args)
-    alphaZero.learn()

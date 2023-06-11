@@ -3,8 +3,8 @@ import math
 
 import torch
 
-from REIL.HexGameRL.Model import ResNet
-from REIL.HexGameRL.util import get_encoded_state, get_valid_moves, get_value_and_terminated, get_state
+from Model import ResNet
+from util import get_encoded_state, get_valid_moves, get_value_and_terminated, get_state
 from engine import hex_engine
 from copy import deepcopy
 
@@ -174,48 +174,3 @@ class MCTSParallel:
 
                 node.expand(spg_policy)
                 node.backpropagate(spg_value)
-
-
-if __name__ == "__main__":
-    args = {
-        'C': 2,
-        'num_searches': 60,
-        'num_iterations': 3,
-        'num_selfPlay_iterations': 500,
-        'num_epochs': 4,
-        'batch_size': 64,
-        'temperature': 1.25,
-        'dirichlet_epsilon': 0.25,
-        'dirichlet_alpha': 0.3
-    }
-
-    game = hex_engine.hexPosition(size=3)
-    model = ResNet(game, 4, 64, device="cpu")
-    model.eval()
-    mcts = MCTS(game, args, model)
-
-    while True:
-        game.print()
-
-        if game.player == 1:
-            valid_moves = game.get_action_space()
-            print(valid_moves)
-            action = tuple(map(int, input(f'action:').split(',')))
-
-            if action not in valid_moves:
-                print("not valid")
-                continue
-
-        else:
-            game.board = game.recode_black_as_white()
-            game.player = 1
-            mcts_probs = mcts.search()
-            action = game.recode_coordinates(game.scalar_to_coordinates(np.argmax(mcts_probs)))
-            game.board = game.recode_black_as_white()
-            game.player = -1
-
-        game.moove(action)
-        if game.winner != 0:
-            print(game.winner)
-            break
-

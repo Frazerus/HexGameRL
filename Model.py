@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from REIL.HexGameRL.engine import hex_engine
+from engine import hex_engine
 
 
 class ResBlock(nn.Module):
@@ -66,29 +66,3 @@ class ResNet(nn.Module):
         policy = self.policyHead(x)
         value = self.valueHead(x)
         return policy, value
-
-
-if __name__ == "__main__":
-    game = hex_engine.hexPosition()
-
-    for _ in range(5):
-        game.moove(random.choice(game.get_action_space()))
-
-    game.print()
-    print(game.board)
-    board = np.array(game.board)
-    print(board)
-    encoded_state = np.stack(
-        (board == 1, board == 0, board == -1)
-    ).astype(np.float32)
-
-    print(encoded_state[1].flatten())
-
-    tensor_state = torch.tensor(encoded_state).unsqueeze(0)
-
-    model = ResNet(game, 4, 64)
-    policy, value = model(tensor_state)
-    value = value.item()
-    policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy()
-
-    print(value, policy)
